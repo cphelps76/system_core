@@ -453,11 +453,6 @@ static int setLogFormat(const char * formatString)
     return 0;
 }
 
-static void setColoredOutput()
-{
-    android_log_setColoredOutput(g_logformat);
-}
-
 extern "C" void logprint_run_tests(void);
 
 int main(int argc, char **argv)
@@ -518,7 +513,7 @@ int main(int argc, char **argv)
             break;
 
             case 'C':
-                setColoredOutput();
+                android_log_setColoredOutput(g_logformat, 1);
             break;
 
             case 'b': {

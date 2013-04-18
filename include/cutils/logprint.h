@@ -17,6 +17,8 @@
 #ifndef _LOGPRINT_H
 #define _LOGPRINT_H
 
+#include <stdbool.h>
+
 #include <cutils/log.h>
 #include <cutils/logger.h>
 #include <cutils/event_tag_map.h>
@@ -38,11 +40,6 @@ typedef enum {
     FORMAT_LONG,
 } AndroidLogPrintFormat;
 
-typedef enum {
-    OUTPUT_COLOR_ON = 0,
-    OUTPUT_COLOR_OFF,
-} AndroidLogColoredOutput;
-
 typedef struct AndroidLogFormat_t AndroidLogFormat;
 
 typedef struct AndroidLogEntry_t {
@@ -63,7 +60,7 @@ void android_log_format_free(AndroidLogFormat *p_format);
 void android_log_setPrintFormat(AndroidLogFormat *p_format, 
         AndroidLogPrintFormat format);
 
-void android_log_setColoredOutput(AndroidLogFormat *p_format);
+void android_log_setColoredOutput(AndroidLogFormat *p_format, bool colored_output);
 
 /**
  * Returns FORMAT_OFF on invalid string

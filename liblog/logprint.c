@@ -46,7 +46,7 @@ struct AndroidLogFormat_t {
     android_LogPriority global_pri;
     FilterInfo *filters;
     AndroidLogPrintFormat format;
-    AndroidLogColoredOutput colored_output;
+    bool colored_output;
 };
 
 static FilterInfo * filterinfo_new(const char * tag, android_LogPriority pri)
@@ -199,7 +199,7 @@ AndroidLogFormat *android_log_format_new()
 
     p_ret->global_pri = ANDROID_LOG_VERBOSE;
     p_ret->format = FORMAT_BRIEF;
-    p_ret->colored_output = OUTPUT_COLOR_OFF;
+    p_ret->colored_output = 0;
 
     return p_ret;
 }
@@ -228,9 +228,9 @@ void android_log_setPrintFormat(AndroidLogFormat *p_format,
     p_format->format=format;
 }
 
-void android_log_setColoredOutput(AndroidLogFormat *p_format)
+void android_log_setColoredOutput(AndroidLogFormat *p_format, bool colored_output)
 {
-    p_format->colored_output = OUTPUT_COLOR_ON;
+    p_format->colored_output = colored_output;
 }
 
 /**
@@ -774,12 +774,13 @@ char *android_log_formatLogLine (
     char * prefixBufTmp = prefixBuf;
     size_t prefixBufTmpRemainLen = sizeof(prefixBuf);
 
-    if (p_format->colored_output == OUTPUT_COLOR_ON) {
-    prefixColorLen = snprintf(prefixBufTmp, prefixBufTmpRemainLen, "%c[%d;%d;%dm", 0x1B, 38, 5, colorFromPri(entry->priority));
-    if(prefixColorLen >= prefixBufTmpRemainLen)
-        prefixColorLen = prefixBufTmpRemainLen - 1;
-    prefixBufTmp += prefixColorLen;
-    prefixBufTmpRemainLen -= prefixColorLen;
+    if (p_format->colored_output) {
+        prefixColorLen = snprintf(prefixBufTmp, prefixBufTmpRemainLen,
+            "%c[%d;%d;%dm", 0x1B, 38, 5, colorFromPri(entry->priority));
+        if (prefixColorLen >= prefixBufTmpRemainLen)
+            prefixColorLen = prefixBufTmpRemainLen - 1;
+        prefixBufTmp += prefixColorLen;
+        prefixBufTmpRemainLen -= prefixColorLen;
     }
 
     switch (p_format->format) {
@@ -852,10 +853,11 @@ char *android_log_formatLogLine (
     char * suffixBufTmp = suffixBuf + suffixLen;
     size_t suffixBufTmpRemainLen = sizeof(suffixBuf) - suffixLen;
 
-    if (p_format->colored_output == OUTPUT_COLOR_ON) {
-    suffixColorLen = snprintf(suffixBufTmp, suffixBufTmpRemainLen, "%c[%dm", 0x1B, 0);
-    if(suffixColorLen >= suffixBufTmpRemainLen)
-        suffixColorLen = suffixBufTmpRemainLen - 1;
+    if (p_format->colored_output) {
+        suffixColorLen = snprintf(suffixBufTmp, suffixBufTmpRemainLen, "%c[%dm", 0x1B, 0);
+        if(suffixColorLen >= suffixBufTmpRemainLen) {
+            suffixColorLen = suffixBufTmpRemainLen - 1;
+        }
     }
 
 
