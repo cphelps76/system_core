@@ -31,7 +31,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/personality.h>
 
 #ifdef HAVE_SELINUX
 #include <selinux/selinux.h>
@@ -106,7 +105,7 @@ void notify_service_state(const char *name, const char *state)
 }
 
 static int have_console;
-static char *console_name = "/dev/console";
+static char console_name[PROP_VALUE_MAX] = "/dev/console";
 static time_t process_needs_restart;
 
 static const char *ENV[32];
@@ -264,21 +263,6 @@ void service_start(struct service *svc, const char *dynamic_args)
         int fd, sz;
 
         umask(077);
-#ifdef __arm__
-        /*
-         * b/7188322 - Temporarily revert to the compat memory layout
-         * to avoid breaking third party apps.
-         *
-         * THIS WILL GO AWAY IN A FUTURE ANDROID RELEASE.
-         *
-         * http://git.kernel.org/?p=linux/kernel/git/torvalds/linux-2.6.git;a=commitdiff;h=7dbaa466
-         * changes the kernel mapping from bottom up to top-down.
-         * This breaks some programs which improperly embed
-         * an out of date copy of Android's linker.
-         */
-        int current = personality(0xffffFFFF);
-        personality(current | ADDR_COMPAT_LAYOUT);
-#endif
         if (properties_inited()) {
             get_property_workspace(&fd, &sz);
             sprintf(tmp, "%d,%d", dup(fd), sz);
@@ -477,7 +461,7 @@ static void restart_processes()
 
 static void msg_start(const char *name)
 {
-    struct service *svc;
+    struct service *svc = NULL;
     char *tmp = NULL;
     char *args = NULL;
 
@@ -485,11 +469,13 @@ static void msg_start(const char *name)
         svc = service_find_by_name(name);
     else {
         tmp = strdup(name);
-        args = strchr(tmp, ':');
-        *args = '\0';
-        args++;
+        if (tmp) {
+            args = strchr(tmp, ':');
+            *args = '\0';
+            args++;
 
-        svc = service_find_by_name(tmp);
+            svc = service_find_by_name(tmp);
+        }
     }
 
     if (svc) {
@@ -604,11 +590,9 @@ static int keychord_init_action(int nargs, char **args)
 static int console_init_action(int nargs, char **args)
 {
     int fd;
-    char tmp[PROP_VALUE_MAX];
 
     if (console[0]) {
-        snprintf(tmp, sizeof(tmp), "/dev/%s", console);
-        console_name = strdup(tmp);
+        snprintf(console_name, sizeof(console_name), "/dev/%s", console);
     }
 
     fd = open(console_name, O_RDWR);

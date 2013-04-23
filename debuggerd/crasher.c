@@ -76,6 +76,49 @@ int ctest()
 
 int main(int argc, char **argv)
 {
+
+static void* thread_callback(void* raw_arg)
+{
+    return (void*) do_action((const char*) raw_arg);
+}
+
+int do_action_on_thread(const char* arg)
+{
+    pthread_t t;
+    pthread_create(&t, NULL, thread_callback, (void*) arg);
+    void* result = NULL;
+    pthread_join(t, &result);
+    return (int) result;
+}
+
+__attribute__((noinline)) int crash3(int a) {
+   *((int*) 0xdead) = a;
+   return a*4;
+}
+
+__attribute__((noinline)) int crash2(int a) {
+   a = crash3(a) + 2;
+   return a*3;
+}
+
+__attribute__((noinline)) int crash(int a) {
+   a = crash2(a) + 1;
+   return a*2;
+}
+
+int do_action(const char* arg)
+{
+    if(!strncmp(arg, "thread-", strlen("thread-"))) {
+        return do_action_on_thread(arg + strlen("thread-"));
+    }
+
+    if(!strcmp(arg,"smash-stack")) return smash_stack(42);
+    if(!strcmp(arg,"nostack")) crashnostack();
+    if(!strcmp(arg,"ctest")) return ctest();
+    if(!strcmp(arg,"exit")) exit(1);
+    if(!strcmp(arg,"crash")) return crash(42);
+    if(!strcmp(arg,"abort")) maybeabort();
+
     pthread_t thr;
     pthread_attr_t attr;
 
