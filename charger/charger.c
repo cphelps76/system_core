@@ -67,7 +67,7 @@
 #define BATTERY_FULL_THRESH     95
 
 #define LAST_KMSG_PATH          "/proc/last_kmsg"
-#define LAST_KMSG_MAX_SZ        (32 * 1024)
+#define LAST_KMSG_MAX_SZ        (64 * 1024)
 
 #define LOGE(x...) do { KLOG_ERROR("charger", x); } while (0)
 #define LOGI(x...) do { KLOG_INFO("charger", x); } while (0)
