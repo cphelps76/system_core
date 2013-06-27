@@ -43,6 +43,10 @@
 
 #include <cutils/list.h>
 #include <cutils/uevent.h>
+#ifdef BOARD_USE_MOTOROLA_DEV_ALIAS
+#include <cutils/partition_utils.h>
+#include <sys/poll.h>
+#endif
 
 #include "devices.h"
 #include "util.h"
@@ -71,6 +75,17 @@ struct uevent {
     int minor;
 };
 
+#ifdef BOARD_USE_MOTOROLA_DEV_ALIAS
+#define MAX_MMC_PARTITIONS 32
+#define NAME_LEN 32
+#define ALIAS_LEN 32
+#define PATH_LEN 64
+#define BUF_SIZE MAX_MMC_PARTITIONS*128
+
+static void add_mmc_alias(char *dev_name, char *dev_alias);
+static void get_partition_alias_name(char *devname, char *alias);
+#endif
+
 struct perms_ {
     char *name;
     char *attr;
@@ -87,7 +102,8 @@ struct perm_node {
 
 struct platform_node {
     char *name;
-    int name_len;
+    char *path;
+    int path_len;
     struct listnode list;
 };
 
@@ -222,61 +238,69 @@ static void make_device(const char *path,
 #endif
 }
 
-static void add_platform_device(const char *name)
+static void add_platform_device(const char *path)
 {
-    int name_len = strlen(name);
+    int path_len = strlen(path);
     struct listnode *node;
     struct platform_node *bus;
+    const char *name = path;
+
+    if (!strncmp(path, "/devices/", 9)) {
+        name += 9;
+        if (!strncmp(name, "platform/", 9))
+            name += 9;
+    }
 
     list_for_each_reverse(node, &platform_names) {
         bus = node_to_item(node, struct platform_node, list);
-        if ((bus->name_len < name_len) &&
-                (name[bus->name_len] == '/') &&
-                !strncmp(name, bus->name, bus->name_len))
+        if ((bus->path_len < path_len) &&
+                (path[bus->path_len] == '/') &&
+                !strncmp(path, bus->path, bus->path_len))
             /* subdevice of an existing platform, ignore it */
             return;
     }
 
-    INFO("adding platform device %s\n", name);
+    INFO("adding platform device %s (%s)\n", name, path);
 
     bus = calloc(1, sizeof(struct platform_node));
-    bus->name = strdup(name);
-    bus->name_len = name_len;
+    bus->path = strdup(path);
+    bus->path_len = path_len;
+    bus->name = bus->path + (name - path);
     list_add_tail(&platform_names, &bus->list);
 }
 
 /*
- * given a name that may start with a platform device, find the length of the
+ * given a path that may start with a platform device, find the length of the
  * platform device prefix.  If it doesn't start with a platform device, return
  * 0.
  */
-static const char *find_platform_device(const char *name)
+static struct platform_node *find_platform_device(const char *path)
 {
-    int name_len = strlen(name);
+    int path_len = strlen(path);
     struct listnode *node;
     struct platform_node *bus;
 
     list_for_each_reverse(node, &platform_names) {
         bus = node_to_item(node, struct platform_node, list);
-        if ((bus->name_len < name_len) &&
-                (name[bus->name_len] == '/') &&
-                !strncmp(name, bus->name, bus->name_len))
-            return bus->name;
+        if ((bus->path_len < path_len) &&
+                (path[bus->path_len] == '/') &&
+                !strncmp(path, bus->path, bus->path_len))
+            return bus;
     }
 
     return NULL;
 }
 
-static void remove_platform_device(const char *name)
+static void remove_platform_device(const char *path)
 {
     struct listnode *node;
     struct platform_node *bus;
 
     list_for_each_reverse(node, &platform_names) {
         bus = node_to_item(node, struct platform_node, list);
-        if (!strcmp(name, bus->name)) {
-            INFO("removing platform device %s\n", name);
-            free(bus->name);
+        if (!strcmp(path, bus->path)) {
+            INFO("removing platform device %s\n", bus->name);
+            free(bus->path);
             list_remove(node);
             free(bus);
             return;
@@ -362,8 +386,10 @@ static char **get_character_device_symlinks(struct uevent *uevent)
     char **links;
     int link_num = 0;
     int width;
+    struct platform_node *pdev;
 
-    if (strncmp(uevent->path, "/devices/platform/", 18))
+    pdev = find_platform_device(uevent->path);
+    if (!pdev)
         return NULL;
 
     links = malloc(sizeof(char *) * 2);
@@ -372,7 +398,7 @@ static char **get_character_device_symlinks(struct uevent *uevent)
     memset(links, 0, sizeof(char *) * 2);
 
     /* skip "/devices/platform/<driver>" */
-    parent = strchr(uevent->path + 18, '/');
+    parent = strchr(uevent->path + pdev->path_len, '/');
     if (!*parent)
         goto err;
 
@@ -409,7 +435,7 @@ err:
 static char **parse_platform_block_device(struct uevent *uevent)
 {
     const char *device;
-    const char *path;
+    struct platform_node *pdev;
     char *slash;
     int width;
     char buf[256];
@@ -421,17 +447,15 @@ static char **parse_platform_block_device(struct uevent *uevent)
     unsigned int size;
     struct stat info;
 
+    pdev = find_platform_device(uevent->path);
+    if (!pdev)
+        return NULL;
+    device = pdev->name;
+
     char **links = malloc(sizeof(char *) * 4);
     if (!links)
         return NULL;
     memset(links, 0, sizeof(char *) * 4);
-
-    /* Drop "/devices/platform/" */
-    path = uevent->path;
-    device = path + 18;
-    device = find_platform_device(device);
-    if (!device)
-        goto err;
 
     INFO("found platform device %s\n", device);
 
@@ -454,17 +478,13 @@ static char **parse_platform_block_device(struct uevent *uevent)
             links[link_num] = NULL;
     }
 
-    slash = strrchr(path, '/');
+    slash = strrchr(uevent->path, '/');
     if (asprintf(&links[link_num], "%s/%s", link_path, slash + 1) > 0)
         link_num++;
     else
         links[link_num] = NULL;
 
     return links;
-
-err:
-    free(links);
-    return NULL;
 }
 
 static void handle_device(const char *action, const char *devpath,
@@ -474,6 +494,9 @@ static void handle_device(const char *action, const char *devpath,
 
     if(!strcmp(action, "add")) {
         make_device(devpath, path, block, major, minor);
+#ifdef BOARD_USE_MOTOROLA_DEV_ALIAS
+	device_changed(devpath, 1);
+#endif
         if (links) {
             for (i = 0; links[i]; i++)
                 make_link(devpath, links[i]);
@@ -481,6 +504,9 @@ static void handle_device(const char *action, const char *devpath,
     }
 
     if(!strcmp(action, "remove")) {
+#ifdef BOARD_USE_MOTOROLA_DEV_ALIAS
+	device_changed(devpath, 0);
+#endif
         if (links) {
             for (i = 0; links[i]; i++)
                 remove_link(devpath, links[i]);
@@ -497,12 +523,12 @@ static void handle_device(const char *action, const char *devpath,
 
 static void handle_platform_device_event(struct uevent *uevent)
 {
-    const char *name = uevent->path + 18; /* length of /devices/platform/ */
+    const char *path = uevent->path;
 
     if (!strcmp(uevent->action, "add"))
-        add_platform_device(name);
+        add_platform_device(path);
     else if (!strcmp(uevent->action, "remove"))
-        remove_platform_device(name);
+        remove_platform_device(path);
 }
 
 static const char *parse_device_name(struct uevent *uevent, unsigned int len)
@@ -540,11 +566,26 @@ static void handle_block_device_event(struct uevent *uevent)
     snprintf(devpath, sizeof(devpath), "%s%s", base, name);
     make_dir(base, 0755);
 
-    if (!strncmp(uevent->path, "/devices/platform/", 18))
+    if (!strncmp(uevent->path, "/devices/", 9))
         links = parse_platform_block_device(uevent);
 
     handle_device(uevent->action, devpath, uevent->path, 1,
             uevent->major, uevent->minor, links);
+
+#ifdef BOARD_USE_MOTOROLA_DEV_ALIAS
+    /* make Moto specific /dev/block/alias link */
+    if(!strcmp(uevent->action, "add")) {
+        if(!strncmp(uevent->subsystem, "block", 5)) {
+            char dev_alias[ALIAS_LEN]={'\0'};
+            char *basename;
+
+            basename = strrchr(devpath, '/') + 1;
+            get_partition_alias_name(basename, dev_alias);
+            if (strlen(dev_alias))
+                add_mmc_alias(basename, dev_alias);
+        }
+    }
+#endif
 }
 
 static void handle_generic_device_event(struct uevent *uevent)
@@ -888,8 +929,8 @@ void device_init(void)
         sehandle = selinux_android_file_context_handle();
     }
 #endif
-    /* is 64K enough? udev uses 16MB! */
-    device_fd = uevent_open_socket(64*1024, true);
+    /* is 256K enough? udev uses 16MB! */
+    device_fd = uevent_open_socket(256*1024, true);
     if(device_fd < 0)
         return;
 
@@ -914,3 +955,80 @@ int get_device_fd()
 {
     return device_fd;
 }
+
+#ifdef BOARD_USE_MOTOROLA_DEV_ALIAS
+static void add_mmc_alias(char *dev_name, char *dev_alias)
+{
+    int ret = 0;
+    struct stat buf;
+    char dev_path[PATH_LEN]={'\0'};
+    char dev_link[PATH_LEN]={'\0'};
+    unsigned uid = 0;
+    unsigned gid = 0;
+    mode_t mode = 0;
+
+    if (dev_alias[0] == '\0')
+        return;
+
+    sprintf(dev_path, "/dev/block/%s", dev_name);
+
+    ret = stat(dev_link, &buf);
+    if (!ret)
+        ERROR("The name exist, will not create mmc alias link!\n");
+
+    sprintf(dev_link, "/dev/block/%s", dev_alias);
+
+    mode = get_device_perm(dev_link, &uid, &gid);
+
+    if (!symlink(dev_path, dev_link)) {
+        if (uid != 0 || gid != 0 || mode != 0600) {
+            chown(dev_link, uid, gid);
+            chmod(dev_link, mode | S_IFBLK);
+        }
+    } else if (errno != EEXIST) {
+        ERROR("Create mmc alias link %s->%s error (%s)!\n",
+            dev_path, dev_link, strerror(errno));
+    }
+}
+
+static void get_partition_alias_name(char *devname, char *alias)
+{
+    int fd;
+    char buf[BUF_SIZE];
+    char *data_ptr;
+    char *data_end;
+    ssize_t data_size;
+
+    if (!alias)
+        return;
+
+    fd = open("/proc/partitions", O_RDONLY);
+    if (fd < 0)
+        return;
+
+    buf[sizeof(buf) - 1] = '\0';
+    data_size = read(fd, buf, sizeof(buf) - 1);
+    data_ptr = buf;
+    data_end = buf + data_size;
+    *data_end = '\0';
+    while (data_ptr < data_end) {
+        int dev_major, dev_minor;
+        unsigned long long blocks_num;
+        char dev_name[NAME_LEN]={'\0'};
+        char dev_alias[ALIAS_LEN]={'\0'};
+
+        int r = sscanf(data_ptr, "%4d  %7d %10llu %31s%*['\t']%31[^'\n']\n",
+                   &dev_major, &dev_minor, &blocks_num, dev_name, dev_alias);
+
+        if (r == 5 && !strncmp(dev_name, devname, NAME_LEN)) {
+            strncpy(alias, dev_alias, ALIAS_LEN);
+            break;
+        }
+
+        /* Advance cursor to next line */
+        while (data_ptr < data_end && *data_ptr != '\n') data_ptr++;
+        while (data_ptr < data_end && *data_ptr == '\n') data_ptr++;
+    }
+    close(fd);
+}
+#endif
