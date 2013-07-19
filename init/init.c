@@ -176,8 +176,8 @@ void service_start(struct service *svc, const char *dynamic_args)
     pid_t pid;
     int needs_console;
     int n;
-#ifdef HAVE_SELINUX
     char *scon = NULL;
+#ifdef HAVE_SELINUX
     int rc;
 #endif
         /* starting a service removes it from the disabled or reset
@@ -272,16 +272,12 @@ void service_start(struct service *svc, const char *dynamic_args)
         for (ei = svc->envvars; ei; ei = ei->next)
             add_environment(ei->name, ei->value);
 
-#ifdef HAVE_SELINUX
-        setsockcreatecon(scon);
-#endif
-
         for (si = svc->sockets; si; si = si->next) {
             int socket_type = (
                     !strcmp(si->type, "stream") ? SOCK_STREAM :
                         (!strcmp(si->type, "dgram") ? SOCK_DGRAM : SOCK_SEQPACKET));
             int s = create_socket(si->name, socket_type,
-                                  si->perm, si->uid, si->gid);
+                                  si->perm, si->uid, si->gid, si->socketcon ?: scon);
             if (s >= 0) {
                 publish_socket(si->name, s);
             }
@@ -290,7 +286,6 @@ void service_start(struct service *svc, const char *dynamic_args)
 #ifdef HAVE_SELINUX
         freecon(scon);
         scon = NULL;
-        setsockcreatecon(NULL);
 #endif
 
         if (svc->ioprio_class != IoSchedClass_NONE) {
@@ -799,7 +794,7 @@ static int bootchart_init_action(int nargs, char **args)
 
 #ifdef HAVE_SELINUX
 static const struct selinux_opt seopts_prop[] = {
-        { SELABEL_OPT_PATH, "/data/system/property_contexts" },
+        { SELABEL_OPT_PATH, "/data/security/property_contexts" },
         { SELABEL_OPT_PATH, "/property_contexts" },
         { 0, NULL }
 };
